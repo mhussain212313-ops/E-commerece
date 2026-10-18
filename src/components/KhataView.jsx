@@ -5,7 +5,7 @@ import {
   Share2, Plus, Calendar, AlertCircle, CheckCircle2, ChevronRight, RotateCcw, Trash2
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { generateInvoicePDF, getWhatsAppShareText } from "../utils/pdfGenerator";
+import { generateInvoicePDF, getWhatsAppShareText, openWhatsAppInvoiceShare } from "../utils/pdfGenerator";
 
 export const KhataView = () => {
   const { 
@@ -53,11 +53,7 @@ export const KhataView = () => {
   // WhatsApp Share Handler
   const handleWhatsAppShare = (tx, client) => {
     const cat = categories.find(c => c.id === tx.categoryId);
-    const text = getWhatsAppShareText({ invoice: tx, client, category: cat });
-    const cleanPhone = (client.phone || "").replace(/[^0-9]/g, "");
-    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
-    window.open(url, "_blank");
-    addToast(`Opening WhatsApp with invoice details for ${client.name}...`, "info");
+    openWhatsAppInvoiceShare({ invoice: tx, client, category: cat, addToast });
   };
 
   // ==========================================
@@ -312,13 +308,13 @@ export const KhataView = () => {
                               <span className="badge badge-paid">Payment / Cash</span>
                             ) : isReturn ? (
                               <span className="badge" style={{ background: "rgba(245, 158, 11, 0.15)", color: "var(--accent-amber)" }}>
-                                {tx.returnType === "suits" ? "Returned Suits (4m)" : "Returned Meters"}
+                                {tx.returnType === "suits" ? "Returned Suits" : "Returned Meters"}
                               </span>
                             ) : tx.items && tx.items.length > 1 ? (
                               <span className="badge badge-purple">Multi-Cut Order</span>
                             ) : (
                               <span className="badge badge-purple">
-                                {tx.saleType === "suits" ? "Standard Suits (4m)" : "Custom Meters"}
+                                {tx.saleType === "suits" ? "Standard Suits" : "Custom Meters"}
                               </span>
                             )}
                           </td>

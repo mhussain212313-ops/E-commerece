@@ -5,7 +5,7 @@ import {
   Palette, ArrowRight
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { generateInvoicePDF, getWhatsAppShareText } from "../utils/pdfGenerator";
+import { generateInvoicePDF, getWhatsAppShareText, openWhatsAppInvoiceShare } from "../utils/pdfGenerator";
 
 export const NewSaleModal = () => {
   const { 
@@ -98,9 +98,16 @@ export const NewSaleModal = () => {
   const grandSubtotal = calculatedItems.reduce((sum, i) => sum + i.itemTotal, 0);
   const totalBill = Math.max(0, grandSubtotal - (Number(discount) || 0));
 
+  // Calculate client's previous Khata balance
+  const clientPastTxs = selectedClient?.transactions || [];
+  const pastBilled = clientPastTxs.reduce((sum, t) => sum + (Number(t.totalBill) || 0), 0);
+  const pastPaid = clientPastTxs.reduce((sum, t) => sum + (Number(t.amountPaid) || 0), 0);
+  const previousBalance = (Number(selectedClient?.openingBalance) || 0) + (pastBilled - pastPaid);
+  const totalPayable = previousBalance + totalBill;
+
   // If user hasn't typed an amount paid, default to totalBill
   const paid = amountPaid === "" ? totalBill : Number(amountPaid);
-  const remainingBalance = Math.max(0, totalBill - paid);
+  const netRemainingBalance = totalPayable - paid;
 
   // Check if all items have enough stock
   const allItemsHaveStock = calculatedItems.every(i => i.hasEnough);
@@ -139,8 +146,9 @@ export const NewSaleModal = () => {
       clientId,
       items: payloadItems,
       totalBill,
+      previousBalance,
       amountPaid: paid,
-      remainingBalance,
+      remainingBalance: netRemainingBalance,
       notes
     });
 
@@ -201,24 +209,53 @@ export const NewSaleModal = () => {
               {completedSale.items.map((it, idx) => (
                 <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span>
-                    {idx + 1}. <strong>{it.categoryName}</strong> &bull; {it.quantity} {it.saleType === "suits" ? "Suits (4m)" : "Meters"} ({it.meters}m)
+                    {idx + 1}. <strong>{it.categoryName}</strong> &bull; {it.quantity} {it.saleType === "suits" ? "Suits" : "Meters"} ({it.meters}m)
                   </span>
                   <span style={{ fontWeight: "700" }}>PKR {it.itemTotal.toLocaleString()}</span>
                 </div>
               ))}
 
               <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px dashed var(--border-input)", paddingTop: "8px", marginTop: "4px" }}>
-                <span style={{ fontWeight: "700" }}>Grand Total Bill:</span>
+                <span style={{ fontWeight: "600", color: "var(--text-main)" }}>Current Bill:</span>
                 <strong style={{ fontSize: "14px" }}>PKR {completedSale.tx.totalBill.toLocaleString()}</strong>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: "var(--text-muted)" }}>Amount Paid:</span>
-                <strong style={{ color: "var(--accent-green)" }}>PKR {completedSale.tx.amountPaid.toLocaleString()}</strong>
+                <span style={{ color: "var(--text-muted)" }}>Previous Khata (Pichla Baqaya):</span>
+                <strong style={{ color: (completedSale.previousBalance || 0) > 0 ? "var(--accent-amber)" : (completedSale.previousBalance || 0) < 0 ? "var(--accent-green)" : "var(--text-muted)" }}>
+                  {(completedSale.previousBalance || 0) > 0 
+                    ? `+PKR ${(completedSale.previousBalance || 0).toLocaleString()} (Payable)` 
+                    : (completedSale.previousBalance || 0) < 0 
+                      ? `-PKR ${Math.abs(completedSale.previousBalance || 0).toLocaleString()} (Advance)` 
+                      : "PKR 0 (Nil)"}
+                </strong>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: "var(--text-muted)" }}>Remaining Balance:</span>
-                <strong style={{ color: completedSale.tx.remainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
-                  PKR {completedSale.tx.remainingBalance.toLocaleString()}
+                <span style={{ fontWeight: "700", color: "var(--primary)" }}>Total Net Payable (Kul Rakam):</span>
+                <strong style={{ color: "var(--primary)", fontSize: "15px" }}>
+                  PKR {(completedSale.totalPayable || (completedSale.tx.totalBill + (completedSale.previousBalance || 0))).toLocaleString()}
+                </strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "var(--text-muted)" }}>Amount Paid / Received:</span>
+                <strong style={{ color: "var(--accent-green)" }}>PKR {completedSale.tx.amountPaid.toLocaleString()}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--border-light)", paddingTop: "6px" }}>
+                <span style={{ fontWeight: "700" }}>
+                  {(completedSale.netBalance ?? completedSale.tx.remainingBalance) > 0 
+                    ? "Net Khata Due (Aapne Dene Hain):" 
+                    : (completedSale.netBalance ?? completedSale.tx.remainingBalance) < 0 
+                      ? "Customer Credit (Humne Dene Hain):" 
+                      : "Net Balance:"}
+                </span>
+                <strong style={{ 
+                  color: (completedSale.netBalance ?? completedSale.tx.remainingBalance) > 0 
+                    ? "var(--accent-amber)" 
+                    : "var(--accent-green)",
+                  fontSize: "15px"
+                }}>
+                  {(completedSale.netBalance ?? completedSale.tx.remainingBalance) < 0 
+                    ? `-PKR ${Math.abs(completedSale.netBalance ?? completedSale.tx.remainingBalance).toLocaleString()}` 
+                    : `PKR ${(completedSale.netBalance ?? completedSale.tx.remainingBalance ?? 0).toLocaleString()}`}
                 </strong>
               </div>
             </div>
@@ -245,19 +282,16 @@ export const NewSaleModal = () => {
                 className="btn-success"
                 style={{ padding: "10px 18px" }}
                 onClick={() => {
-                  const text = getWhatsAppShareText({
+                  openWhatsAppInvoiceShare({
                     invoice: completedSale.tx,
                     client: completedSale.client,
-                    category: completedSale.category
+                    category: completedSale.category,
+                    addToast
                   });
-                  const cleanPhone = (completedSale.client.phone || "").replace(/[^0-9]/g, "");
-                  const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
-                  window.open(url, "_blank");
-                  addToast("Opening WhatsApp...", "info");
                 }}
               >
                 <Share2 size={16} />
-                <span>Share to WhatsApp</span>
+                <span>Share to WhatsApp Web</span>
               </button>
             </div>
 
@@ -399,7 +433,7 @@ export const NewSaleModal = () => {
                             }}
                           >
                             <Package size={13} />
-                            <span>Suits (4m)</span>
+                            <span>Suits</span>
                           </button>
 
                           <button
@@ -494,7 +528,7 @@ export const NewSaleModal = () => {
                 <span>+ Add Another Fabric / Color to this Bill</span>
               </button>
 
-              {/* Grand Total & Payment Panel */}
+              {/* Grand Total & Payment Panel with Khata Math */}
               <div style={{ 
                 background: "var(--bg-card)", 
                 border: "2px solid var(--primary-border)", 
@@ -507,25 +541,56 @@ export const NewSaleModal = () => {
               }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", fontWeight: "800", color: "var(--primary)" }}>
-                    <Calculator size={16} /> WHOLESALE BILL SUMMARY
+                    <Calculator size={16} /> WHOLESALE BILL & KHATA BREAKDOWN
                   </div>
                   <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
                     {items.length} Fabric{items.length > 1 ? "s" : ""} &bull; {grandTotalMeters} Meters Total
                   </div>
                 </div>
 
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: "1px solid var(--border-light)", paddingBottom: "10px" }}>
-                  <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-main)" }}>Grand Total Bill:</span>
-                  <span style={{ fontSize: "22px", fontWeight: "800", color: "var(--primary)" }}>
+                {/* Current Bill */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "13.5px", fontWeight: "600", color: "var(--text-main)" }}>Current Bill Amount:</span>
+                  <span style={{ fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
                     PKR {totalBill.toLocaleString()}
+                  </span>
+                </div>
+
+                {/* Previous Khata Balance (Pichla Baqaya) */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "13.5px", color: "var(--text-muted)" }}>
+                    Previous Balance (Pichla Baqaya):
+                  </span>
+                  <span style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "700", 
+                    color: previousBalance > 0 ? "var(--accent-amber)" : previousBalance < 0 ? "var(--accent-green)" : "var(--text-muted)" 
+                  }}>
+                    {previousBalance > 0 
+                      ? `+PKR ${previousBalance.toLocaleString()} (Payable)` 
+                      : previousBalance < 0 
+                        ? `-PKR ${Math.abs(previousBalance).toLocaleString()} (Advance)` 
+                        : "PKR 0 (Nil)"}
+                  </span>
+                </div>
+
+                {/* Total Net Payable */}
+                <div style={{ 
+                  display: "flex", justifyContent: "space-between", alignItems: "baseline", 
+                  borderTop: "1px dashed var(--border-light)", borderBottom: "1px solid var(--border-light)", 
+                  paddingTop: "8px", paddingBottom: "10px" 
+                }}>
+                  <span style={{ fontSize: "14px", fontWeight: "700", color: "var(--primary)" }}>Total Net Payable (Kul Rakam):</span>
+                  <span style={{ fontSize: "22px", fontWeight: "800", color: "var(--primary)" }}>
+                    PKR {totalPayable.toLocaleString()}
                   </span>
                 </div>
 
                 {/* Amount Paid Field & Quick Buttons */}
                 <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                    <label className="form-label" style={{ marginBottom: 0 }}>Amount Paid / Received (PKR)</label>
-                    <div style={{ display: "flex", gap: "6px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px", flexWrap: "wrap", gap: "6px" }}>
+                    <label className="form-label" style={{ marginBottom: 0 }}>Amount Received / Paid (PKR)</label>
+                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                       <button
                         type="button"
                         style={{
@@ -535,8 +600,21 @@ export const NewSaleModal = () => {
                         }}
                         onClick={() => setAmountPaid(String(totalBill))}
                       >
-                        Full Cash
+                        Bill Cash (PKR {totalBill.toLocaleString()})
                       </button>
+                      {previousBalance > 0 && (
+                        <button
+                          type="button"
+                          style={{
+                            fontSize: "11px", padding: "3px 10px", borderRadius: "4px",
+                            border: "1px solid var(--primary-border)", background: "var(--primary-light)",
+                            color: "var(--primary)", fontWeight: "600", cursor: "pointer"
+                          }}
+                          onClick={() => setAmountPaid(String(Math.max(0, totalPayable)))}
+                        >
+                          Clear Total (PKR {totalPayable.toLocaleString()})
+                        </button>
+                      )}
                       <button
                         type="button"
                         style={{
@@ -554,7 +632,6 @@ export const NewSaleModal = () => {
                   <input 
                     type="number"
                     min="0"
-                    max={totalBill}
                     className="form-input"
                     placeholder={`e.g. ${totalBill}`}
                     value={amountPaid}
@@ -567,15 +644,23 @@ export const NewSaleModal = () => {
                 <div style={{ 
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                   padding: "10px 14px", 
-                  background: remainingBalance > 0 ? "var(--accent-amber-light)" : "var(--accent-green-light)",
-                  border: `1px solid ${remainingBalance > 0 ? "var(--accent-amber-border)" : "var(--accent-green-border)"}`,
+                  background: netRemainingBalance > 0 ? "var(--accent-amber-light)" : "var(--accent-green-light)",
+                  border: `1px solid ${netRemainingBalance > 0 ? "var(--accent-amber-border)" : "var(--accent-green-border)"}`,
                   borderRadius: "8px"
                 }}>
-                  <span style={{ fontSize: "13px", fontWeight: "700", color: remainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
-                    {remainingBalance > 0 ? "Remaining Balance (Client Khata Due):" : "Payment Status:"}
+                  <span style={{ fontSize: "13px", fontWeight: "700", color: netRemainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
+                    {netRemainingBalance > 0 
+                      ? "Net Khata Due (Aapne Dene Hain):" 
+                      : netRemainingBalance < 0 
+                        ? "Advance Credit (Humne Dene Hain):" 
+                        : "Khata Status:"}
                   </span>
-                  <span style={{ fontSize: "16px", fontWeight: "800", color: remainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
-                    {remainingBalance > 0 ? `PKR ${remainingBalance.toLocaleString()}` : "Fully Paid (Settled)"}
+                  <span style={{ fontSize: "16px", fontWeight: "800", color: netRemainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
+                    {netRemainingBalance > 0 
+                      ? `PKR ${netRemainingBalance.toLocaleString()}` 
+                      : netRemainingBalance < 0 
+                        ? `-PKR ${Math.abs(netRemainingBalance).toLocaleString()}` 
+                        : "Fully Settled (Hisab Nil)"}
                   </span>
                 </div>
               </div>

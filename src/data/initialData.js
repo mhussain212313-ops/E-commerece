@@ -93,9 +93,9 @@ export const FABRIC_CATEGORIES = [
     name: "Washing Wear - Standard",
     shortName: "Washing Wear",
     theme: "Washing Wear",
-    pricePerMeter: 400,
+    pricePerMeter: 425,
     suitMeters: 4,
-    suitPrice: 1600,
+    suitPrice: 1700, // 4 * 425
     thaanMeters: 24,
     thaanSuits: 6,
     colorCode: "#64748b",

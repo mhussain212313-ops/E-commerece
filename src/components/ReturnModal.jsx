@@ -358,7 +358,7 @@ export const ReturnModal = () => {
                       onClick={() => setReturnType("suits")}
                     >
                       <Package size={16} />
-                      <span>Standard Suits (4m)</span>
+                      <span>Standard Suits</span>
                     </button>
 
                     <button

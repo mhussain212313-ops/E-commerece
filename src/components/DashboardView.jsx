@@ -5,7 +5,7 @@ import {
   Share2, ChevronRight, CheckCircle2, AlertCircle, RefreshCw
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { generateInvoicePDF, getWhatsAppShareText } from "../utils/pdfGenerator";
+import { generateInvoicePDF, getWhatsAppShareText, openWhatsAppInvoiceShare } from "../utils/pdfGenerator";
 
 export const DashboardView = () => {
   const { 
@@ -62,11 +62,7 @@ export const DashboardView = () => {
       city: tx.clientCity
     };
     const cat = categories.find(c => c.id === tx.categoryId);
-    const text = getWhatsAppShareText({ invoice: tx, client, category: cat });
-    const cleanPhone = (client.phone || "").replace(/[^0-9]/g, "");
-    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
-    window.open(url, "_blank");
-    addToast(`Opening WhatsApp for ${client.name}...`, "info");
+    openWhatsAppInvoiceShare({ invoice: tx, client, category: cat, addToast });
   };
 
   return (
@@ -517,7 +513,7 @@ export const DashboardView = () => {
                           <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
                             {tx.items && tx.items.length > 1 
                               ? `${tx.items.length} collections • ${tx.meters}m total fabric`
-                              : `${tx.quantity} ${tx.saleType === "suits" ? "Suits (4m)" : "Meters"} (${tx.meters}m total)`}
+                              : `${tx.quantity} ${tx.saleType === "suits" ? "Suits" : "Meters"} (${tx.meters}m total)`}
                           </div>
                         </td>
                         <td>

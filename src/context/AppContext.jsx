@@ -24,7 +24,15 @@ export const AppProvider = ({ children }) => {
   const [categories, setCategories] = useState(() => {
     const saved = localStorage.getItem("zeno_categories");
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+      try { 
+        const parsed = JSON.parse(saved);
+        return parsed.map(c => {
+          if (c.id === "cat-5" || c.name?.toLowerCase().includes("washing wear") || c.shortName?.toLowerCase().includes("washing wear")) {
+            return { ...c, pricePerMeter: 425, suitPrice: 1700 };
+          }
+          return c;
+        });
+      } catch (e) { console.error(e); }
     }
     return FABRIC_CATEGORIES.map(cat => ({
       ...cat,
@@ -95,7 +103,13 @@ export const AppProvider = ({ children }) => {
         ]);
 
         if (catSnap.exists() && Array.isArray(catSnap.data().list) && catSnap.data().list.length > 0) {
-          setCategories(catSnap.data().list);
+          const updatedCats = catSnap.data().list.map(c => {
+            if (c.id === "cat-5" || c.name?.toLowerCase().includes("washing wear") || c.shortName?.toLowerCase().includes("washing wear")) {
+              return { ...c, pricePerMeter: 425, suitPrice: 1700 };
+            }
+            return c;
+          });
+          setCategories(updatedCats);
         } else {
           setDoc(doc(db, "zeno_store", "categories"), { list: categories }).catch(() => {});
         }
@@ -495,7 +509,19 @@ export const AppProvider = ({ children }) => {
 
     const calculatedTotalBill = Number(totalBill) || saleItems.reduce((sum, i) => sum + (Number(i.itemTotal) || 0), 0);
     const paid = Number(amountPaid);
-    const balance = Number(remainingBalance);
+
+    // Calculate customer's Khata previous balance
+    const clientPastTxs = client.transactions || [];
+    const pastBilled = clientPastTxs.reduce((sum, t) => sum + (Number(t.totalBill) || 0), 0);
+    const pastPaid = clientPastTxs.reduce((sum, t) => sum + (Number(t.amountPaid) || 0), 0);
+    const calculatedPrevBalance = (Number(client.openingBalance) || 0) + (pastBilled - pastPaid);
+    const prevBal = remainingBalance !== undefined && remainingBalance.previousBalance !== undefined 
+      ? Number(remainingBalance.previousBalance) 
+      : calculatedPrevBalance;
+
+    const totalPayable = prevBal + calculatedTotalBill;
+    const finalNetBalance = totalPayable - paid;
+
     const invoiceNo = `INV-2026-${String(Math.floor(Math.random() * 9000) + 1000)}`;
     const totalMetersAll = saleItems.reduce((sum, i) => sum + Number(i.meters || 0), 0);
 
@@ -512,8 +538,11 @@ export const AppProvider = ({ children }) => {
       meters: totalMetersAll,
       ratePerMeter: saleItems[0]?.ratePerMeter || 400,
       totalBill: calculatedTotalBill,
+      previousBalance: prevBal,
+      totalPayable: totalPayable,
       amountPaid: paid,
-      remainingBalance: balance,
+      remainingBalance: finalNetBalance,
+      netBalance: finalNetBalance,
       notes: notes || `Wholesale sale: ${saleItems.length} fabric types (${totalMetersAll}m total)`
     };
 
@@ -545,7 +574,10 @@ export const AppProvider = ({ children }) => {
       tx: newTx,
       client,
       items: saleItems,
-      category: categories.find(c => c.id === saleItems[0]?.categoryId)
+      category: categories.find(c => c.id === saleItems[0]?.categoryId),
+      previousBalance: prevBal,
+      totalPayable,
+      netBalance: finalNetBalance
     };
   };
 
