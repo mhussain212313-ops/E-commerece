@@ -14,15 +14,24 @@ import { ReturnModal } from "./components/ReturnModal";
 import { Toast } from "./components/Toast";
 
 const MainLayout = () => {
-  const { activeModule, modalState } = useApp();
+  const { activeModule, modalState, sidebarOpen, setSidebarOpen } = useApp();
 
   return (
     <div className="zeno-app">
+      {/* Mobile Backdrop Overlay */}
+      {sidebarOpen && (
+        <div 
+          className="sidebar-backdrop" 
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar Navigation */}
       <Sidebar />
 
       {/* Main Content Area */}
-      <div className="zeno-main-wrapper">
+      <div className={`zeno-main-wrapper ${!sidebarOpen ? "sidebar-collapsed" : ""}`}>
         <Navbar />
 
         <main style={{ flex: 1 }}>

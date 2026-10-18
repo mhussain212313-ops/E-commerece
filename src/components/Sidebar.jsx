@@ -1,13 +1,13 @@
 import React from "react";
 import { 
   LayoutDashboard, Layers, BookOpen, Repeat, Users, 
-  FileText, TrendingUp, Sparkles, CheckCircle2, ChevronRight, RotateCcw
+  FileText, TrendingUp, Sparkles, CheckCircle2, ChevronRight, RotateCcw, X
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 
 export const Sidebar = () => {
   const { 
-    activeModule, setActiveModule, sidebarOpen, 
+    activeModule, setActiveModule, sidebarOpen, setSidebarOpen,
     categories, clients, totalPendingAmount, setModalState 
   } = useApp();
 
@@ -15,21 +15,41 @@ export const Sidebar = () => {
     return sum + (c.stock.thaan * 6) + Math.floor(c.stock.looseMeters / 4) + c.stock.packetSuits;
   }, 0);
 
+  // Auto-close drawer on mobile when an item is clicked
+  const handleNavClick = (action) => {
+    if (action) action();
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setSidebarOpen(false);
+    }
+  };
+
   return (
-    <aside className={`zeno-sidebar ${!sidebarOpen ? "collapsed" : ""}`}>
-      {/* Brand Header matching reference screenshots */}
+    <aside className={`zeno-sidebar ${sidebarOpen ? "open" : "collapsed"}`}>
+      {/* Brand Header */}
       <div className="sidebar-brand">
-        <div className="brand-icon-zeno" title="Salahuddin Fabrics">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="12 2 2 7 12 12 22 7 12 2" />
-            <polyline points="2 17 12 22 22 17" />
-            <polyline points="2 12 12 17 22 12" />
-          </svg>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+          <div className="brand-icon-zeno" title="Salahuddin Fabrics">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="12 2 2 7 12 12 22 7 12 2" />
+              <polyline points="2 17 12 22 22 17" />
+              <polyline points="2 12 12 17 22 12" />
+            </svg>
+          </div>
+          <div className="brand-title-wrap" style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
+            <span className="brand-text">Salahuddin</span>
+            <span className="brand-badge">Fabrics</span>
+          </div>
         </div>
-        <div className="brand-title-wrap" style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
-          <span className="brand-text">Salahuddin</span>
-          <span className="brand-badge">Fabrics</span>
-        </div>
+
+        {/* Mobile Close Button */}
+        <button 
+          className="sidebar-close-mobile-btn"
+          onClick={() => setSidebarOpen(false)}
+          title="Close Navigation"
+          aria-label="Close Navigation Sidebar"
+        >
+          <X size={20} />
+        </button>
       </div>
 
       {/* Navigation Sections */}
@@ -40,7 +60,7 @@ export const Sidebar = () => {
           <li>
             <button
               className={`nav-item-btn ${activeModule === "dashboard" ? "active" : ""}`}
-              onClick={() => setActiveModule("dashboard")}
+              onClick={() => handleNavClick(() => setActiveModule("dashboard"))}
             >
               <div className="nav-item-left">
                 <LayoutDashboard size={18} className="nav-icon" />
@@ -54,7 +74,7 @@ export const Sidebar = () => {
           <li>
             <button
               className={`nav-item-btn ${activeModule === "inventory" ? "active" : ""}`}
-              onClick={() => setActiveModule("inventory")}
+              onClick={() => handleNavClick(() => setActiveModule("inventory"))}
             >
               <div className="nav-item-left">
                 <Layers size={18} className="nav-icon" />
@@ -70,7 +90,7 @@ export const Sidebar = () => {
           <li>
             <button
               className={`nav-item-btn ${activeModule === "khata" ? "active" : ""}`}
-              onClick={() => setActiveModule("khata")}
+              onClick={() => handleNavClick(() => setActiveModule("khata"))}
             >
               <div className="nav-item-left">
                 <BookOpen size={18} className="nav-icon" />
@@ -93,10 +113,10 @@ export const Sidebar = () => {
           <li>
             <button 
               className="nav-item-btn"
-              onClick={() => {
+              onClick={() => handleNavClick(() => {
                 setActiveModule("inventory");
                 setModalState(prev => ({ ...prev, convertStock: true }));
-              }}
+              })}
             >
               <div className="nav-item-left">
                 <Repeat size={17} className="nav-icon" />
@@ -109,10 +129,10 @@ export const Sidebar = () => {
           <li>
             <button 
               className="nav-item-btn"
-              onClick={() => {
+              onClick={() => handleNavClick(() => {
                 setActiveModule("khata");
                 setModalState(prev => ({ ...prev, newSale: true }));
-              }}
+              })}
             >
               <div className="nav-item-left">
                 <TrendingUp size={17} className="nav-icon" />
@@ -124,10 +144,10 @@ export const Sidebar = () => {
           <li>
             <button 
               className="nav-item-btn"
-              onClick={() => {
+              onClick={() => handleNavClick(() => {
                 setActiveModule("khata");
                 setModalState(prev => ({ ...prev, recordReturn: true }));
-              }}
+              })}
             >
               <div className="nav-item-left">
                 <RotateCcw size={17} className="nav-icon" style={{ color: "var(--accent-amber)" }} />
@@ -135,13 +155,14 @@ export const Sidebar = () => {
               </div>
             </button>
           </li>
+
           <li>
             <button 
               className="nav-item-btn"
-              onClick={() => {
+              onClick={() => handleNavClick(() => {
                 setActiveModule("khata");
                 setModalState(prev => ({ ...prev, addClient: true }));
-              }}
+              })}
             >
               <div className="nav-item-left">
                 <Users size={17} className="nav-icon" />

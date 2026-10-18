@@ -54,7 +54,7 @@ export const Navbar = () => {
       <div className="navbar-right">
         {/* Language Icon */}
         <button 
-          className="nav-icon-btn" 
+          className="nav-icon-btn nav-globe-btn" 
           title="Language: English / Urdu (PKR Currency)"
           onClick={() => addToast("Active Currency: Pakistani Rupee (PKR) • English / Urdu B2B Support", "info")}
         >
@@ -128,7 +128,7 @@ export const Navbar = () => {
 
         {/* Fullscreen Toggle */}
         <button 
-          className="nav-icon-btn" 
+          className="nav-icon-btn nav-fullscreen-btn" 
           onClick={toggleFullScreen}
           title="Toggle Fullscreen"
         >
@@ -137,7 +137,7 @@ export const Navbar = () => {
 
         {/* Settings / DB Info Modal Toggle */}
         <button 
-          className="nav-icon-btn" 
+          className="nav-icon-btn nav-settings-btn" 
           onClick={() => setShowSettingsModal(true)}
           title="Database Connection & Settings"
         >

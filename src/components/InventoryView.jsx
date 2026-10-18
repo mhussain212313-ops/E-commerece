@@ -56,7 +56,7 @@ export const InventoryView = () => {
 
       <div className="main-content">
         {/* Critical Math Banner / Rules Bar */}
-        <div style={{
+        <div className="inventory-math-banner" style={{
           background: "linear-gradient(135deg, rgba(112, 71, 235, 0.08), rgba(147, 51, 234, 0.05))",
           border: "1px solid var(--primary-border)",
           borderRadius: "var(--radius-lg)",
@@ -82,7 +82,7 @@ export const InventoryView = () => {
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          <div className="inventory-banner-stats" style={{ display: "flex", alignItems: "center", gap: "16px" }}>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: "11px", color: "var(--text-light)", textTransform: "uppercase" }}>Total Inventory Meters</div>
               <div style={{ fontSize: "17px", fontWeight: "800", color: "var(--text-main)" }}>
@@ -100,7 +100,7 @@ export const InventoryView = () => {
         </div>
 
         {/* 5 Fabric Category Stock Cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "22px", marginBottom: "30px" }}>
+        <div className="inventory-cards-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 300px), 1fr))", gap: "22px", marginBottom: "30px" }}>
           {filteredCategories.map((cat) => {
             const thaan = cat.stock.thaan || 0;
             const loose = cat.stock.looseMeters || 0;

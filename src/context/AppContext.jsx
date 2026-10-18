@@ -17,8 +17,13 @@ export const AppProvider = ({ children }) => {
   // Global search query
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Sidebar toggle state
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Sidebar toggle state (responsive: closed on mobile, open on desktop)
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.innerWidth >= 1024;
+    }
+    return false;
+  });
 
   // Categories & Live Stock State
   const [categories, setCategories] = useState(() => {

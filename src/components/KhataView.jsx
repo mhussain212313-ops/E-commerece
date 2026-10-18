@@ -461,7 +461,7 @@ export const KhataView = () => {
 
       <div className="main-content">
         {/* Search & Filter Bar */}
-        <div style={{ 
+        <div className="khata-filter-bar" style={{ 
           display: "flex", gap: "16px", marginBottom: "24px", 
           flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" 
         }}>
@@ -496,7 +496,7 @@ export const KhataView = () => {
         </div>
 
         {/* Client Profiles Grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "20px" }}>
+        <div className="khata-clients-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 300px), 1fr))", gap: "20px" }}>
           {filteredClients.map((client) => {
             const metrics = getClientMetrics(client);
 
