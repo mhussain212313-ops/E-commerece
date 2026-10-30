@@ -28,21 +28,35 @@ export const AppProvider = ({ children }) => {
   // Categories & Live Stock State
   const [categories, setCategories] = useState(() => {
     const saved = localStorage.getItem("zeno_categories");
+    let baseList = FABRIC_CATEGORIES.map(cat => ({
+      ...cat,
+      stock: { ...(cat.initialStock || {}) }
+    }));
+
     if (saved) {
       try { 
         const parsed = JSON.parse(saved);
-        return parsed.map(c => {
-          if (c.id === "cat-5" || c.name?.toLowerCase().includes("washing wear") || c.shortName?.toLowerCase().includes("washing wear")) {
-            return { ...c, pricePerMeter: 425, suitPrice: 1700 };
-          }
-          return c;
-        });
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          baseList = FABRIC_CATEGORIES.map(defaultCat => {
+            const found = parsed.find(c => c.id === defaultCat.id || c.shortName?.toLowerCase() === defaultCat.shortName?.toLowerCase());
+            if (found) {
+              return {
+                ...defaultCat,
+                ...found,
+                stock: found.stock || defaultCat.initialStock || {}
+              };
+            }
+            return defaultCat;
+          });
+        }
       } catch (e) { console.error(e); }
     }
-    return FABRIC_CATEGORIES.map(cat => ({
-      ...cat,
-      stock: { ...cat.initialStock }
-    }));
+    return baseList.map(c => {
+      if (c.id === "cat-5" || c.name?.toLowerCase().includes("washing wear") || c.shortName?.toLowerCase().includes("washing wear")) {
+        return { ...c, pricePerMeter: 425, suitPrice: 1700 };
+      }
+      return c;
+    });
   });
 
   // Clients & Khata Ledger State
@@ -108,7 +122,20 @@ export const AppProvider = ({ children }) => {
         ]);
 
         if (catSnap.exists() && Array.isArray(catSnap.data().list) && catSnap.data().list.length > 0) {
-          const updatedCats = catSnap.data().list.map(c => {
+          const remoteList = catSnap.data().list;
+          const mergedList = FABRIC_CATEGORIES.map(defaultCat => {
+            const found = remoteList.find(c => c.id === defaultCat.id || c.shortName?.toLowerCase() === defaultCat.shortName?.toLowerCase());
+            if (found) {
+              return {
+                ...defaultCat,
+                ...found,
+                stock: found.stock || defaultCat.initialStock || {}
+              };
+            }
+            return { ...defaultCat, stock: { ...(defaultCat.initialStock || {}) } };
+          });
+
+          const updatedCats = mergedList.map(c => {
             if (c.id === "cat-5" || c.name?.toLowerCase().includes("washing wear") || c.shortName?.toLowerCase().includes("washing wear")) {
               return { ...c, pricePerMeter: 425, suitPrice: 1700 };
             }
@@ -185,16 +212,19 @@ export const AppProvider = ({ children }) => {
     setTheme(prev => (prev === "light" ? "dark" : "light"));
   };
 
-  // Helper calculations for any category
+  // Helper calculations for any category (safe against null/undefined stock)
   const getCategoryTotalMeters = (cat) => {
-    const thaanMeters = (cat.stock.thaan || 0) * 24;
-    const looseMeters = cat.stock.looseMeters || 0;
-    const packetMeters = (cat.stock.packetSuits || 0) * 4;
+    if (!cat) return 0;
+    const stock = cat.stock || cat.initialStock || {};
+    const thaanMeters = (stock.thaan || 0) * 24;
+    const looseMeters = stock.looseMeters || 0;
+    const packetMeters = (stock.packetSuits || 0) * 4;
     return thaanMeters + looseMeters + packetMeters;
   };
 
   const getCategoryTotalValue = (cat) => {
-    return getCategoryTotalMeters(cat) * cat.pricePerMeter;
+    if (!cat) return 0;
+    return getCategoryTotalMeters(cat) * (cat.pricePerMeter || 0);
   };
 
   // 1. BUSINESS AGGREGATE METRICS (Live Calculation for Task 4)
@@ -629,11 +659,12 @@ export const AppProvider = ({ children }) => {
   // 6. RECORD STOCK RETURN / WAPSI (Task: Sales Return with automatic restock & ledger balance adjustment)
   const recordReturn = ({
     clientId,
+    items = [], // Array of { categoryId, categoryName, shortName, returnType, quantity, meters, ratePerMeter, itemTotal }
     categoryId,
-    returnType = "suits", // 'suits' (4m standard suit) or 'meters'
+    returnType = "suits",
     quantity = 1,
     ratePerMeter,
-    refundType = "khata", // 'khata' (credit note / deduct pending) or 'cash' (cash refunded)
+    refundType = "khata",
     note = ""
   }) => {
     const client = clients.find(c => c.id === clientId);
@@ -641,31 +672,52 @@ export const AppProvider = ({ children }) => {
       addToast("Please select a valid client", "error");
       return false;
     }
-    const cat = categories.find(c => c.id === categoryId);
-    if (!cat) {
-      addToast("Please select a fabric category", "error");
-      return false;
-    }
-    const qty = Number(quantity);
-    if (!qty || qty <= 0) {
-      addToast("Please enter a valid return quantity", "error");
-      return false;
+
+    // Normalize return items
+    let returnItems = Array.isArray(items) && items.length > 0 ? items : [];
+    if (returnItems.length === 0) {
+      const cat = categories.find(c => c.id === categoryId);
+      if (!cat) {
+        addToast("Please select a fabric category", "error");
+        return false;
+      }
+      const qty = Number(quantity);
+      if (!qty || qty <= 0) {
+        addToast("Please enter a valid return quantity", "error");
+        return false;
+      }
+      const rate = Number(ratePerMeter) || cat.pricePerMeter;
+      const totalM = returnType === "suits" ? qty * 4 : qty;
+      returnItems = [{
+        categoryId: cat.id,
+        categoryName: cat.name,
+        shortName: cat.shortName,
+        returnType,
+        quantity: qty,
+        meters: totalM,
+        ratePerMeter: rate,
+        itemTotal: totalM * rate
+      }];
     }
 
-    const rate = Number(ratePerMeter) || cat.pricePerMeter;
-    const totalMeters = returnType === "suits" ? qty * 4 : qty;
-    const returnAmount = totalMeters * rate;
+    const totalReturnAmount = returnItems.reduce((sum, it) => sum + (Number(it.itemTotal) || 0), 0);
     const returnSlipNo = `RET-${String(Math.floor(Math.random() * 9000) + 1000)}`;
+    const totalReturnMeters = returnItems.reduce((sum, it) => sum + (Number(it.meters) || 0), 0);
 
     // 1. ADD RETURNED FABRIC BACK TO INVENTORY STOCK
     setCategories(prev => prev.map(c => {
-      if (c.id !== categoryId) return c;
+      const matchingItems = returnItems.filter(it => it.categoryId === c.id);
+      if (matchingItems.length === 0) return c;
+
       const currentStock = { ...c.stock };
-      if (returnType === "suits") {
-        currentStock.packetSuits = (currentStock.packetSuits || 0) + qty;
-      } else {
-        currentStock.looseMeters = (currentStock.looseMeters || 0) + qty;
-      }
+      matchingItems.forEach(it => {
+        const qty = Number(it.quantity) || 0;
+        if (it.returnType === "suits" || it.saleType === "suits") {
+          currentStock.packetSuits = (currentStock.packetSuits || 0) + qty;
+        } else {
+          currentStock.looseMeters = (currentStock.looseMeters || 0) + qty;
+        }
+      });
       return { ...c, stock: currentStock };
     }));
 
@@ -674,19 +726,18 @@ export const AppProvider = ({ children }) => {
       id: "tx-" + Date.now(),
       invoiceNo: returnSlipNo,
       date: new Date().toISOString().split("T")[0],
-      categoryId: cat.id,
-      categoryName: `${cat.name}`,
-      shortName: cat.shortName,
+      items: returnItems,
+      categoryId: returnItems[0]?.categoryId,
+      categoryName: returnItems.map(it => `${it.shortName || it.categoryName} (${it.quantity} ${it.returnType === "suits" ? "Suits" : "m"})`).join(", "),
       saleType: "return",
-      returnType,
-      quantity: qty,
-      meters: totalMeters,
-      ratePerMeter: rate,
-      totalBill: refundType === "khata" ? -returnAmount : 0,
+      quantity: returnItems.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0),
+      meters: totalReturnMeters,
+      ratePerMeter: returnItems[0]?.ratePerMeter || 400,
+      totalBill: refundType === "khata" ? -totalReturnAmount : 0,
       amountPaid: 0,
-      remainingBalance: refundType === "khata" ? -returnAmount : 0,
+      remainingBalance: refundType === "khata" ? -totalReturnAmount : 0,
       refundType,
-      notes: note || `Stock Return: ${qty} ${returnType === "suits" ? "Packet Suits" : "Loose Meters"} (${totalMeters}m) returned back to stock. ${refundType === "khata" ? "Khata Credited" : "Cash Refunded"}.`
+      notes: note || `Stock Return (${returnItems.length} items): ${totalReturnMeters}m restored back to stock. ${refundType === "khata" ? "Khata Credited" : "Cash Refunded"}.`
     };
 
     setClients(prev => prev.map(c => {
@@ -701,16 +752,16 @@ export const AppProvider = ({ children }) => {
     const newLog = {
       id: "log-" + Date.now(),
       timestamp: new Date().toLocaleString(),
-      categoryId: cat.id,
-      categoryName: cat.name,
+      categoryId: returnItems[0]?.categoryId || "multi",
+      categoryName: `${returnItems.length} Fabric Collections Returned`,
       action: "return",
-      details: `Return from ${client.name} (${returnSlipNo}): +${qty} ${returnType === "suits" ? "Packet Suits" : "Loose Meters"} restored to live stock`,
-      deductions: refundType === "khata" ? `Khata Credited: -PKR ${returnAmount.toLocaleString()}` : "Cash Refunded to Client",
-      additions: `+${qty} ${returnType === "suits" ? "Packet Suits" : "Loose Meters"} (${totalMeters}m)`
+      details: `Return from ${client.name} (${returnSlipNo}): +${totalReturnMeters}m restored to live stock`,
+      deductions: refundType === "khata" ? `Khata Credited: -PKR ${totalReturnAmount.toLocaleString()}` : "Cash Refunded to Client",
+      additions: `+${totalReturnMeters}m Restored`
     };
     setStockLogs(prev => [newLog, ...prev]);
 
-    addToast(`Stock Return accepted! +${qty} ${returnType === "suits" ? "Suits" : "Meters"} restored to ${cat.shortName} & Khata adjusted!`, "success");
+    addToast(`Stock Return accepted! +${totalReturnMeters}m restored to stock & Khata adjusted!`, "success");
     return true;
   };
 
