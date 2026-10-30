@@ -7,6 +7,7 @@ import {
 import { useApp } from "../context/AppContext";
 import { generateInvoicePDF, openWhatsAppInvoiceShare } from "../utils/pdfGenerator";
 import { FABRIC_CATEGORIES } from "../data/initialData";
+import { calculateClientPurchasedFabrics } from "../utils/clientHistory";
 
 export const NewSaleModal = () => {
   const { 
@@ -66,6 +67,37 @@ export const NewSaleModal = () => {
 
   const selectedClient = clients.find(c => c.id === clientId) || clients[0];
 
+  // Calculate client's purchase history and holding for return eligibility
+  const clientPurchasedMap = useMemo(() => {
+    return calculateClientPurchasedFabrics(selectedClient);
+  }, [selectedClient]);
+
+  // Reset or clamp quantities when switching mode or client
+  useEffect(() => {
+    if (orderMode === "return") {
+      setSuitQuantities(prev => {
+        const next = { ...prev };
+        activeCategories.forEach(cat => {
+          const maxAllowed = clientPurchasedMap[cat.id]?.netSuitsHolding || 0;
+          if (Number(next[cat.id]) > maxAllowed) {
+            next[cat.id] = maxAllowed > 0 ? maxAllowed : "";
+          }
+        });
+        return next;
+      });
+      setTpQuantities(prev => {
+        const next = { ...prev };
+        activeCategories.forEach(cat => {
+          const maxAllowed = clientPurchasedMap[cat.id]?.netTpHolding || 0;
+          if (Number(next[cat.id]) > maxAllowed) {
+            next[cat.id] = maxAllowed > 0 ? maxAllowed : "";
+          }
+        });
+        return next;
+      });
+    }
+  }, [orderMode, clientId, clientPurchasedMap, activeCategories]);
+
   // Helper for TP abbreviation
   const getTpAbbr = (cat) => {
     const theme = (cat.theme || "").toLowerCase();
@@ -92,32 +124,99 @@ export const NewSaleModal = () => {
     return cat.shortName || "Standard";
   };
 
-  // Suit Quantity Handlers
-  const handleSuitQtyChange = (catId, val) => {
-    const clean = val === "" ? "" : Math.max(0, parseInt(val, 10) || 0);
-    setSuitQuantities(prev => ({ ...prev, [catId]: clean }));
+  // Helper to get max limits for a category row
+  const getRowLimits = (cat, currentSuitQty, currentTpQty) => {
+    const totalAvailMeters = getCategoryTotalMeters ? getCategoryTotalMeters(cat) : 0;
+    const holding = clientPurchasedMap[cat.id] || { netSuitsHolding: 0, netTpHolding: 0, totalSuitsBought: 0, totalTpMetersBought: 0 };
+
+    if (orderMode === "sale") {
+      // INVENTORY STOCK LIMITATION:
+      // Can only buy what is in stock!
+      const availForSuits = Math.max(0, totalAvailMeters - (Number(currentTpQty) || 0));
+      const maxSuits = Math.floor(availForSuits / 4);
+
+      const availForTp = Math.max(0, totalAvailMeters - ((Number(currentSuitQty) || 0) * 4));
+      const maxTpMeters = availForTp;
+
+      return {
+        maxSuits,
+        maxTpMeters,
+        totalAvailMeters,
+        holding,
+        isSuitDisabled: maxSuits <= 0 && (!currentSuitQty || Number(currentSuitQty) === 0),
+        isTpDisabled: maxTpMeters <= 0 && (!currentTpQty || Number(currentTpQty) === 0),
+      };
+    } else {
+      // RETURN LIMITATION:
+      // Can ONLY return what this specific client has actually bought and still holds!
+      const maxSuits = holding.netSuitsHolding || 0;
+      const maxTpMeters = holding.netTpHolding || 0;
+
+      return {
+        maxSuits,
+        maxTpMeters,
+        totalAvailMeters,
+        holding,
+        isSuitDisabled: maxSuits <= 0,
+        isTpDisabled: maxTpMeters <= 0,
+      };
+    }
   };
 
-  const stepSuitQty = (catId, delta) => {
-    setSuitQuantities(prev => {
-      const current = Number(prev[catId]) || 0;
-      const next = Math.max(0, current + delta);
-      return { ...prev, [catId]: next === 0 ? "" : next };
-    });
+  // Suit Quantity Handlers with strict stock/purchase clamp
+  const handleSuitQtyChange = (cat, val) => {
+    if (val === "") {
+      setSuitQuantities(prev => ({ ...prev, [cat.id]: "" }));
+      return;
+    }
+    const num = Math.max(0, parseInt(val, 10) || 0);
+    const { maxSuits } = getRowLimits(cat, num, tpQuantities[cat.id]);
+
+    if (num > maxSuits) {
+      if (orderMode === "sale") {
+        addToast(`Only ${maxSuits} suits available in stock for ${cat.shortName}!`, "warning");
+      } else {
+        addToast(`Client only bought ${maxSuits} suits of ${cat.shortName} eligible for return!`, "warning");
+      }
+      setSuitQuantities(prev => ({ ...prev, [cat.id]: maxSuits }));
+    } else {
+      setSuitQuantities(prev => ({ ...prev, [cat.id]: num }));
+    }
   };
 
-  // TP Quantity Handlers
-  const handleTpQtyChange = (catId, val) => {
-    const clean = val === "" ? "" : Math.max(0, parseFloat(val) || 0);
-    setTpQuantities(prev => ({ ...prev, [catId]: clean }));
+  const stepSuitQty = (cat, delta) => {
+    const current = Number(suitQuantities[cat.id]) || 0;
+    const { maxSuits } = getRowLimits(cat, current, tpQuantities[cat.id]);
+    const next = Math.max(0, Math.min(maxSuits, current + delta));
+    setSuitQuantities(prev => ({ ...prev, [cat.id]: next === 0 ? "" : next }));
   };
 
-  const stepTpQty = (catId, delta) => {
-    setTpQuantities(prev => {
-      const current = Number(prev[catId]) || 0;
-      const next = Math.max(0, current + delta);
-      return { ...prev, [catId]: next === 0 ? "" : next };
-    });
+  // TP Quantity Handlers with strict stock/purchase clamp
+  const handleTpQtyChange = (cat, val) => {
+    if (val === "") {
+      setTpQuantities(prev => ({ ...prev, [cat.id]: "" }));
+      return;
+    }
+    const num = Math.max(0, parseFloat(val) || 0);
+    const { maxTpMeters } = getRowLimits(cat, suitQuantities[cat.id], num);
+
+    if (num > maxTpMeters) {
+      if (orderMode === "sale") {
+        addToast(`Only ${maxTpMeters}m available in stock for TP ${cat.shortName}!`, "warning");
+      } else {
+        addToast(`Client only bought ${maxTpMeters}m of TP ${cat.shortName} eligible for return!`, "warning");
+      }
+      setTpQuantities(prev => ({ ...prev, [cat.id]: maxTpMeters }));
+    } else {
+      setTpQuantities(prev => ({ ...prev, [cat.id]: num }));
+    }
+  };
+
+  const stepTpQty = (cat, delta) => {
+    const current = Number(tpQuantities[cat.id]) || 0;
+    const { maxTpMeters } = getRowLimits(cat, suitQuantities[cat.id], current);
+    const next = Math.max(0, Math.min(maxTpMeters, current + delta));
+    setTpQuantities(prev => ({ ...prev, [cat.id]: next === 0 ? "" : next }));
   };
 
   // Reset form
@@ -150,9 +249,7 @@ export const NewSaleModal = () => {
       const tpMeters = tpQty;
       const tpTotal = tpQty * ratePerMeter;
 
-      const totalNeededMeters = suitMeters + tpMeters;
-      const availableMeters = getCategoryTotalMeters ? getCategoryTotalMeters(cat) : 0;
-      const isStockAvailable = orderMode === "return" ? true : (totalNeededMeters <= availableMeters);
+      const limits = getRowLimits(cat, suitQty, tpQty);
 
       return {
         category: cat,
@@ -166,12 +263,10 @@ export const NewSaleModal = () => {
         tpMeters,
         ratePerMeter,
         tpTotal,
-        totalNeededMeters,
-        availableMeters,
-        isStockAvailable
+        ...limits
       };
     });
-  }, [activeCategories, suitQuantities, tpQuantities, getCategoryTotalMeters, orderMode]);
+  }, [activeCategories, suitQuantities, tpQuantities, getCategoryTotalMeters, orderMode, clientPurchasedMap]);
 
   // Grand Totals across all 10 lines
   const totalSuitQty = rowCalculations.reduce((sum, r) => sum + r.suitQty, 0);
@@ -199,7 +294,6 @@ export const NewSaleModal = () => {
   const paid = amountPaid === "" ? (orderMode === "sale" ? todayTotalAmount : 0) : Number(amountPaid);
   const netRemainingBalance = orderMode === "sale" ? (totalSum - paid) : totalSum;
 
-  const allStockValid = rowCalculations.every(r => r.isStockAvailable);
   const hasAtLeastOneItem = totalSuitQty > 0 || totalTpMeters > 0;
 
   const handleClose = () => {
@@ -215,14 +309,16 @@ export const NewSaleModal = () => {
       return;
     }
 
-    if (orderMode === "sale" && !allStockValid) {
-      const exceeded = rowCalculations.filter(r => !r.isStockAvailable);
-      const names = exceeded.map(r => `${r.category.shortName} (Need ${r.totalNeededMeters}m, Avail ${r.availableMeters}m)`).join(", ");
-      addToast(`Stock exceeded for: ${names}`, "error");
-      return;
-    }
-
     if (orderMode === "sale") {
+      // Validate inventory stock again
+      for (const r of rowCalculations) {
+        const totalNeeded = r.suitMeters + r.tpMeters;
+        if (totalNeeded > r.totalAvailMeters) {
+          addToast(`Cannot sell ${r.category.shortName}! Need ${totalNeeded}m but only ${r.totalAvailMeters}m available in stock.`, "error");
+          return;
+        }
+      }
+
       // Record Sale
       const payloadItems = [];
       rowCalculations.forEach(r => {
@@ -269,6 +365,18 @@ export const NewSaleModal = () => {
         addToast("Sale recorded successfully in Khata & live stock deducted!", "success");
       }
     } else {
+      // Validate return eligibility against purchase history
+      for (const r of rowCalculations) {
+        if (r.suitQty > r.maxSuits) {
+          addToast(`Cannot return ${r.suitQty} suits of ${r.category.shortName}! Client only bought ${r.maxSuits}.`, "error");
+          return;
+        }
+        if (r.tpQty > r.maxTpMeters) {
+          addToast(`Cannot return ${r.tpQty}m of TP ${r.category.shortName}! Client only bought ${r.maxTpMeters}m.`, "error");
+          return;
+        }
+      }
+
       // Record Return (Wapsi)
       const returnPayload = [];
       rowCalculations.forEach(r => {
@@ -320,10 +428,10 @@ export const NewSaleModal = () => {
       <div 
         className="modal-container" 
         onClick={e => e.stopPropagation()} 
-        style={{ maxWidth: "860px", width: "95vw", maxHeight: "95vh", display: "flex", flexDirection: "column" }}
+        style={{ maxWidth: "880px", width: "96vw", maxHeight: "96vh", display: "flex", flexDirection: "column" }}
       >
         {/* Header with Mode Switch (New Stock vs Return Stock) */}
-        <div className="modal-header" style={{ padding: "14px 18px", borderBottom: "1px solid var(--border-light)" }}>
+        <div className="modal-header" style={{ padding: "12px 18px", borderBottom: "1px solid var(--border-light)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <div className={`stat-icon-circle ${orderMode === "sale" ? "stat-icon-purple" : "stat-icon-amber"}`} style={{ width: "36px", height: "36px" }}>
               <TrendingUp size={18} />
@@ -333,12 +441,14 @@ export const NewSaleModal = () => {
                 <h3 className="modal-title" style={{ fontSize: "16px", fontWeight: "800" }}>
                   {orderMode === "sale" ? "New Stock Sale & Daily Khata" : "Return Stock (Wapsi Voucher)"}
                 </h3>
-                <span className="badge-purple" style={{ fontSize: "10.5px", padding: "1px 7px" }}>
-                  10 Items Wholesale Slip
+                <span className={orderMode === "sale" ? "badge-purple" : "badge-amber"} style={{ fontSize: "10.5px", padding: "1px 7px" }}>
+                  {orderMode === "sale" ? "Stock-Limited (Max Clamped)" : "Purchase-Restricted (Bought Only)"}
                 </span>
               </div>
-              <p style={{ fontSize: "11.5px", color: "var(--text-muted)", margin: 0 }}>
-                All 5 Suits + All 5 TP Loose Cuts visible at once
+              <p style={{ fontSize: "11px", color: "var(--text-muted)", margin: 0 }}>
+                {orderMode === "sale" 
+                  ? "Quantities cannot exceed inventory stock available. Zero stock is disabled."
+                  : "Client can only return fabrics they actually purchased. Unpurchased fabrics are disabled."}
               </p>
             </div>
           </div>
@@ -520,7 +630,7 @@ export const NewSaleModal = () => {
             <div 
               ref={modalBodyRef}
               className="modal-body" 
-              style={{ overflowY: "auto", padding: "14px 18px", display: "flex", flexDirection: "column", gap: "12px" }}
+              style={{ overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: "10px" }}
             >
               
               {/* Client Selection Card with Khata Overview */}
@@ -528,15 +638,15 @@ export const NewSaleModal = () => {
                 background: "var(--bg-subtle)",
                 border: "1px solid var(--border-input)",
                 borderRadius: "var(--radius-md)",
-                padding: "10px 14px",
+                padding: "8px 12px",
                 display: "flex",
                 flexWrap: "wrap",
                 alignItems: "center",
                 justifyContent: "space-between",
-                gap: "10px"
+                gap: "8px"
               }}>
                 <div style={{ flex: "1 1 280px" }}>
-                  <label className="form-label" style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "3px" }}>
+                  <label className="form-label" style={{ fontSize: "10.5px", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "2px" }}>
                     Select B2B Client / Khata Account
                   </label>
                   <select 
@@ -544,7 +654,7 @@ export const NewSaleModal = () => {
                     value={clientId}
                     onChange={(e) => setClientId(e.target.value)}
                     required
-                    style={{ fontWeight: "600", fontSize: "13px", padding: "6px 10px" }}
+                    style={{ fontWeight: "600", fontSize: "12.5px", padding: "5px 8px" }}
                   >
                     {clients.map(c => (
                       <option key={c.id} value={c.id}>
@@ -557,18 +667,18 @@ export const NewSaleModal = () => {
                 <div style={{ 
                   display: "flex", 
                   alignItems: "center", 
-                  gap: "12px", 
+                  gap: "10px", 
                   background: "var(--bg-card)", 
-                  padding: "6px 12px", 
+                  padding: "5px 10px", 
                   borderRadius: "var(--radius-sm)", 
                   border: "1px solid var(--border-light)"
                 }}>
                   <div>
-                    <div style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                    <div style={{ fontSize: "9.5px", color: "var(--text-muted)", textTransform: "uppercase" }}>
                       Pervs Amount (Pichla Baqaya)
                     </div>
                     <div style={{ 
-                      fontSize: "13.5px", 
+                      fontSize: "13px", 
                       fontWeight: "800",
                       color: previousBalance > 0 ? "var(--accent-amber)" : previousBalance < 0 ? "var(--accent-green)" : "var(--text-muted)"
                     }}>
@@ -584,10 +694,10 @@ export const NewSaleModal = () => {
                     type="button" 
                     onClick={handleResetForm}
                     className="btn-secondary" 
-                    style={{ padding: "4px 8px", fontSize: "11px", gap: "4px", height: "fit-content" }}
+                    style={{ padding: "3px 7px", fontSize: "10.5px", gap: "3px", height: "fit-content" }}
                     title="Clear all quantity inputs"
                   >
-                    <RotateCcw size={12} />
+                    <RotateCcw size={11} />
                     <span>Reset</span>
                   </button>
                 </div>
@@ -609,20 +719,20 @@ export const NewSaleModal = () => {
                   boxShadow: "var(--shadow-sm)"
                 }}>
                   <div style={{
-                    padding: "8px 12px",
+                    padding: "7px 10px",
                     background: "var(--primary-light)",
                     borderBottom: "1px solid var(--primary-border)",
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center"
                   }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <Package size={15} color="var(--primary)" />
-                      <strong style={{ fontSize: "12.5px", color: "var(--primary)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                      <Package size={14} color="var(--primary)" />
+                      <strong style={{ fontSize: "12px", color: "var(--primary)" }}>
                         Standard Suits (4m Each) — 5 Colors
                       </strong>
                     </div>
-                    <div style={{ fontSize: "11.5px", fontWeight: "700", color: "var(--primary)" }}>
+                    <div style={{ fontSize: "11px", fontWeight: "700", color: "var(--primary)" }}>
                       {totalSuitQty} Suits &bull; PKR {totalSuitAmount.toLocaleString()}
                     </div>
                   </div>
@@ -630,6 +740,8 @@ export const NewSaleModal = () => {
                   <div style={{ display: "flex", flexDirection: "column" }}>
                     {rowCalculations.map((row, idx) => {
                       const isFilled = row.suitQty > 0;
+                      const isDisabled = row.isSuitDisabled;
+
                       return (
                         <div 
                           key={"suit-" + row.category.id}
@@ -637,17 +749,18 @@ export const NewSaleModal = () => {
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "space-between",
-                            padding: "7px 12px",
+                            padding: "6px 10px",
                             borderBottom: idx < rowCalculations.length - 1 ? "1px solid var(--border-light)" : "none",
-                            background: isFilled ? "var(--primary-light)" : "transparent",
+                            background: isFilled ? "var(--primary-light)" : isDisabled ? "var(--bg-subtle)" : "transparent",
+                            opacity: isDisabled ? 0.6 : 1,
                             transition: "background var(--transition-fast)"
                           }}
                         >
                           {/* Color Name & Swatch */}
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: "135px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "7px", minWidth: "140px" }}>
                             <span 
                               style={{ 
-                                width: "13px", height: "13px", borderRadius: "50%", 
+                                width: "12px", height: "12px", borderRadius: "50%", 
                                 backgroundColor: row.category.colorCode || "#ccc",
                                 border: "1px solid rgba(0,0,0,0.2)",
                                 flexShrink: 0
@@ -656,82 +769,105 @@ export const NewSaleModal = () => {
                             <div>
                               <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                                 <span style={{ 
-                                  fontSize: "9.5px", fontWeight: "700", textTransform: "uppercase", 
+                                  fontSize: "9px", fontWeight: "700", textTransform: "uppercase", 
                                   background: row.themeTag === "Light" ? "#fef3c7" : row.themeTag === "Dark" ? "#1e293b" : "#e2e8f0",
                                   color: row.themeTag === "Dark" ? "#fff" : "#92400e",
                                   padding: "1px 4px", borderRadius: "3px"
                                 }}>
                                   {row.themeTag}
                                 </span>
-                                <strong style={{ fontSize: "12px", color: "var(--text-main)" }}>
+                                <strong style={{ fontSize: "11.5px", color: "var(--text-main)" }}>
                                   {row.category.shortName}
                                 </strong>
                               </div>
-                              <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>
-                                PKR {row.suitPrice.toLocaleString()} &bull; {row.availableMeters}m avail
+                              <div style={{ fontSize: "9.5px", color: isDisabled ? "var(--accent-red)" : "var(--text-muted)" }}>
+                                {orderMode === "sale" 
+                                  ? (row.maxSuits > 0 ? `Max Stock: ${row.maxSuits} Suits` : "0 in stock (Sold out)")
+                                  : (row.maxSuits > 0 ? `Bought: ${row.holding.totalSuitsBought} (Max: ${row.maxSuits})` : "0 bought (Cannot return)")}
                               </div>
                             </div>
                           </div>
 
-                          {/* Stepper & Quick Buttons */}
-                          <div style={{ display: "flex", alignItems: "center", gap: "3px" }}>
+                          {/* Stepper & Controls */}
+                          <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
                             <button
                               type="button"
                               className="btn-secondary"
-                              style={{ width: "24px", height: "26px", padding: 0, justifyContent: "center" }}
-                              onClick={() => stepSuitQty(row.category.id, -1)}
-                              disabled={!row.suitQty}
+                              style={{ width: "22px", height: "24px", padding: 0, justifyContent: "center" }}
+                              onClick={() => stepSuitQty(row.category, -1)}
+                              disabled={isDisabled || !row.suitQty}
                             >
-                              <Minus size={11} />
+                              <Minus size={10} />
                             </button>
 
                             <input 
                               type="number"
                               min="0"
+                              max={row.maxSuits}
                               placeholder="0"
                               className="form-input"
+                              disabled={isDisabled}
                               style={{ 
-                                width: "46px", height: "26px", padding: "0 2px", 
-                                textAlign: "center", fontWeight: "700", fontSize: "12.5px" 
+                                width: "42px", height: "24px", padding: "0 2px", 
+                                textAlign: "center", fontWeight: "700", fontSize: "12px",
+                                background: isDisabled ? "var(--bg-subtle)" : "var(--bg-input)"
                               }}
                               value={suitQuantities[row.category.id]}
-                              onChange={(e) => handleSuitQtyChange(row.category.id, e.target.value)}
+                              onChange={(e) => handleSuitQtyChange(row.category, e.target.value)}
                             />
 
                             <button
                               type="button"
                               className="btn-secondary"
-                              style={{ width: "24px", height: "26px", padding: 0, justifyContent: "center" }}
-                              onClick={() => stepSuitQty(row.category.id, 1)}
+                              style={{ width: "22px", height: "24px", padding: 0, justifyContent: "center" }}
+                              onClick={() => stepSuitQty(row.category, 1)}
+                              disabled={isDisabled || (row.suitQty >= row.maxSuits)}
+                              title={row.suitQty >= row.maxSuits ? "Reached maximum available limit" : "Add 1"}
                             >
-                              <Plus size={11} />
+                              <Plus size={10} />
                             </button>
 
                             {/* Preset Buttons */}
                             <div style={{ display: "flex", gap: "2px", marginLeft: "2px" }}>
-                              {[2, 5].map(n => (
+                              {[2, 5].filter(n => n <= row.maxSuits).map(n => (
                                 <button
                                   key={n}
                                   type="button"
+                                  disabled={isDisabled}
                                   style={{
-                                    fontSize: "9.5px", padding: "2px 4px", borderRadius: "3px",
+                                    fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
                                     border: "1px solid var(--border-input)", background: "var(--bg-card)",
-                                    cursor: "pointer", color: "var(--text-muted)"
+                                    cursor: isDisabled ? "not-allowed" : "pointer", color: "var(--text-muted)"
                                   }}
-                                  onClick={() => handleSuitQtyChange(row.category.id, n)}
+                                  onClick={() => handleSuitQtyChange(row.category, n)}
                                 >
                                   {n}
                                 </button>
                               ))}
+                              {row.maxSuits > 0 && (
+                                <button
+                                  type="button"
+                                  disabled={isDisabled}
+                                  style={{
+                                    fontSize: "8.5px", padding: "1px 4px", borderRadius: "3px",
+                                    border: "1px solid var(--primary-border)", background: "var(--primary-light)",
+                                    cursor: isDisabled ? "not-allowed" : "pointer", color: "var(--primary)", fontWeight: "700"
+                                  }}
+                                  onClick={() => handleSuitQtyChange(row.category, row.maxSuits)}
+                                  title={`Select all available ${row.maxSuits} suits`}
+                                >
+                                  Max
+                                </button>
+                              )}
                             </div>
                           </div>
 
                           {/* Row Total */}
-                          <div style={{ textAlign: "right", minWidth: "65px" }}>
-                            <div style={{ fontSize: "12.5px", fontWeight: "800", color: isFilled ? "var(--primary)" : "var(--text-light)" }}>
+                          <div style={{ textAlign: "right", minWidth: "60px" }}>
+                            <div style={{ fontSize: "11.5px", fontWeight: "800", color: isFilled ? "var(--primary)" : "var(--text-light)" }}>
                               PKR {row.suitTotal.toLocaleString()}
                             </div>
-                            <div style={{ fontSize: "9.5px", color: "var(--text-muted)" }}>
+                            <div style={{ fontSize: "9px", color: "var(--text-muted)" }}>
                               {row.suitMeters}m
                             </div>
                           </div>
@@ -750,20 +886,20 @@ export const NewSaleModal = () => {
                   boxShadow: "var(--shadow-sm)"
                 }}>
                   <div style={{
-                    padding: "8px 12px",
+                    padding: "7px 10px",
                     background: "#f0fdf4",
                     borderBottom: "1px solid var(--accent-green-border)",
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center"
                   }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <Scissors size={15} color="var(--accent-green)" />
-                      <strong style={{ fontSize: "12.5px", color: "var(--accent-green)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                      <Scissors size={14} color="var(--accent-green)" />
+                      <strong style={{ fontSize: "12px", color: "var(--accent-green)" }}>
                         TP Cuts (Than Piece — Loose Meters) — 5 Colors
                       </strong>
                     </div>
-                    <div style={{ fontSize: "11.5px", fontWeight: "700", color: "var(--accent-green)" }}>
+                    <div style={{ fontSize: "11px", fontWeight: "700", color: "var(--accent-green)" }}>
                       {totalTpMeters}m TP &bull; PKR {totalTpAmount.toLocaleString()}
                     </div>
                   </div>
@@ -771,6 +907,8 @@ export const NewSaleModal = () => {
                   <div style={{ display: "flex", flexDirection: "column" }}>
                     {rowCalculations.map((row, idx) => {
                       const isFilled = row.tpQty > 0;
+                      const isDisabled = row.isTpDisabled;
+
                       return (
                         <div 
                           key={"tp-" + row.category.id}
@@ -778,17 +916,18 @@ export const NewSaleModal = () => {
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "space-between",
-                            padding: "7px 12px",
+                            padding: "6px 10px",
                             borderBottom: idx < rowCalculations.length - 1 ? "1px solid var(--border-light)" : "none",
-                            background: isFilled ? "#f0fdf4" : "transparent",
+                            background: isFilled ? "#f0fdf4" : isDisabled ? "var(--bg-subtle)" : "transparent",
+                            opacity: isDisabled ? 0.6 : 1,
                             transition: "background var(--transition-fast)"
                           }}
                         >
                           {/* TP Abbreviation & Color Name */}
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: "135px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "7px", minWidth: "140px" }}>
                             <span 
                               style={{ 
-                                width: "13px", height: "13px", borderRadius: "3px", 
+                                width: "12px", height: "12px", borderRadius: "3px", 
                                 backgroundColor: row.category.colorCode || "#ccc",
                                 border: "1px solid rgba(0,0,0,0.2)",
                                 flexShrink: 0
@@ -797,82 +936,105 @@ export const NewSaleModal = () => {
                             <div>
                               <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                                 <span style={{ 
-                                  fontSize: "9.5px", fontWeight: "800", 
+                                  fontSize: "9px", fontWeight: "800", 
                                   background: "#dcfce7", color: "#15803d",
-                                  padding: "1px 5px", borderRadius: "3px"
+                                  padding: "1px 4px", borderRadius: "3px"
                                 }}>
                                   {row.tpAbbr}
                                 </span>
-                                <strong style={{ fontSize: "12px", color: "var(--text-main)" }}>
+                                <strong style={{ fontSize: "11.5px", color: "var(--text-main)" }}>
                                   {row.category.shortName}
                                 </strong>
                               </div>
-                              <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>
-                                PKR {row.ratePerMeter}/m &bull; Loose: {row.category.stock?.looseMeters || 0}m
+                              <div style={{ fontSize: "9.5px", color: isDisabled ? "var(--accent-red)" : "var(--text-muted)" }}>
+                                {orderMode === "sale" 
+                                  ? (row.maxTpMeters > 0 ? `Max Stock: ${row.maxTpMeters}m` : "0m in stock")
+                                  : (row.maxTpMeters > 0 ? `Bought: ${row.holding.totalTpMetersBought}m (Max: ${row.maxTpMeters}m)` : "0m bought (Cannot return)")}
                               </div>
                             </div>
                           </div>
 
-                          {/* Stepper & Quick Meter Buttons */}
-                          <div style={{ display: "flex", alignItems: "center", gap: "3px" }}>
+                          {/* Stepper & Controls */}
+                          <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
                             <button
                               type="button"
                               className="btn-secondary"
-                              style={{ width: "24px", height: "26px", padding: 0, justifyContent: "center" }}
-                              onClick={() => stepTpQty(row.category.id, -1)}
-                              disabled={!row.tpQty}
+                              style={{ width: "22px", height: "24px", padding: 0, justifyContent: "center" }}
+                              onClick={() => stepTpQty(row.category, -1)}
+                              disabled={isDisabled || !row.tpQty}
                             >
-                              <Minus size={11} />
+                              <Minus size={10} />
                             </button>
 
                             <input 
                               type="number"
                               min="0"
+                              max={row.maxTpMeters}
                               step="any"
                               placeholder="0"
                               className="form-input"
+                              disabled={isDisabled}
                               style={{ 
-                                width: "46px", height: "26px", padding: "0 2px", 
-                                textAlign: "center", fontWeight: "700", fontSize: "12.5px" 
+                                width: "42px", height: "24px", padding: "0 2px", 
+                                textAlign: "center", fontWeight: "700", fontSize: "12px",
+                                background: isDisabled ? "var(--bg-subtle)" : "var(--bg-input)"
                               }}
                               value={tpQuantities[row.category.id]}
-                              onChange={(e) => handleTpQtyChange(row.category.id, e.target.value)}
+                              onChange={(e) => handleTpQtyChange(row.category, e.target.value)}
                             />
 
                             <button
                               type="button"
                               className="btn-secondary"
-                              style={{ width: "24px", height: "26px", padding: 0, justifyContent: "center" }}
-                              onClick={() => stepTpQty(row.category.id, 1)}
+                              style={{ width: "22px", height: "24px", padding: 0, justifyContent: "center" }}
+                              onClick={() => stepTpQty(row.category, 1)}
+                              disabled={isDisabled || (row.tpQty >= row.maxTpMeters)}
+                              title={row.tpQty >= row.maxTpMeters ? "Reached maximum available limit" : "Add 1m"}
                             >
-                              <Plus size={11} />
+                              <Plus size={10} />
                             </button>
 
                             {/* Preset Buttons */}
                             <div style={{ display: "flex", gap: "2px", marginLeft: "2px" }}>
-                              {[1, 2, 9].map(n => (
+                              {[1, 2, 9].filter(n => n <= row.maxTpMeters).map(n => (
                                 <button
                                   key={n}
                                   type="button"
+                                  disabled={isDisabled}
                                   style={{
-                                    fontSize: "9.5px", padding: "2px 4px", borderRadius: "3px",
+                                    fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
                                     border: "1px solid var(--border-input)", background: "var(--bg-card)",
-                                    cursor: "pointer", color: "var(--text-muted)"
+                                    cursor: isDisabled ? "not-allowed" : "pointer", color: "var(--text-muted)"
                                   }}
-                                  onClick={() => handleTpQtyChange(row.category.id, n)}
+                                  onClick={() => handleTpQtyChange(row.category, n)}
                                 >
                                   {n}m
                                 </button>
                               ))}
+                              {row.maxTpMeters > 0 && (
+                                <button
+                                  type="button"
+                                  disabled={isDisabled}
+                                  style={{
+                                    fontSize: "8.5px", padding: "1px 4px", borderRadius: "3px",
+                                    border: "1px solid var(--accent-green-border)", background: "var(--accent-green-light)",
+                                    cursor: isDisabled ? "not-allowed" : "pointer", color: "var(--accent-green)", fontWeight: "700"
+                                  }}
+                                  onClick={() => handleTpQtyChange(row.category, row.maxTpMeters)}
+                                  title={`Select all available ${row.maxTpMeters}m`}
+                                >
+                                  Max
+                                </button>
+                              )}
                             </div>
                           </div>
 
                           {/* Row Total */}
-                          <div style={{ textAlign: "right", minWidth: "65px" }}>
-                            <div style={{ fontSize: "12.5px", fontWeight: "800", color: isFilled ? "var(--accent-green)" : "var(--text-light)" }}>
+                          <div style={{ textAlign: "right", minWidth: "60px" }}>
+                            <div style={{ fontSize: "11.5px", fontWeight: "800", color: isFilled ? "var(--accent-green)" : "var(--text-light)" }}>
                               PKR {row.tpTotal.toLocaleString()}
                             </div>
-                            <div style={{ fontSize: "9.5px", color: "var(--text-muted)" }}>
+                            <div style={{ fontSize: "9px", color: "var(--text-muted)" }}>
                               {row.tpQty || 0}m
                             </div>
                           </div>
@@ -896,10 +1058,10 @@ export const NewSaleModal = () => {
                 background: "var(--bg-card)",
                 border: "2px solid var(--primary-border)",
                 borderRadius: "var(--radius-md)",
-                padding: "12px 14px",
+                padding: "10px 12px",
                 display: "flex",
                 flexDirection: "column",
-                gap: "8px",
+                gap: "6px",
                 boxShadow: "var(--shadow-sm)"
               }}>
                 <div style={{ 
@@ -907,26 +1069,26 @@ export const NewSaleModal = () => {
                   justifyContent: "space-between", 
                   alignItems: "center",
                   borderBottom: "1px solid var(--border-light)",
-                  paddingBottom: "6px"
+                  paddingBottom: "5px"
                 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: "800", color: "var(--primary)" }}>
-                    <Calculator size={15} /> WHOLESALE SLIP SUMMARY & KHATA CALCULATION
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", fontWeight: "800", color: "var(--primary)" }}>
+                    <Calculator size={14} /> WHOLESALE SLIP SUMMARY & KHATA CALCULATION
                   </div>
-                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
+                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
                     {orderMode === "sale" ? "Daily Order Ledger" : "Return / Wapsi Adjustment"}
                   </span>
                 </div>
 
                 {/* Line 1: Total suit */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "12.5px", fontWeight: "700", color: "var(--text-main)" }}>
+                  <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-main)" }}>
                     Total suit (Kul Suits):
                   </span>
                   <div style={{ textAlign: "right" }}>
-                    <span style={{ fontSize: "14px", fontWeight: "800", color: "var(--primary)" }}>
+                    <span style={{ fontSize: "13.5px", fontWeight: "800", color: "var(--primary)" }}>
                       {totalSuitQty} Suits
                     </span>
-                    <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "6px" }}>
+                    <span style={{ fontSize: "10.5px", color: "var(--text-muted)", marginLeft: "6px" }}>
                       ({totalSuitMeters}m &bull; PKR {totalSuitAmount.toLocaleString()})
                     </span>
                   </div>
@@ -934,14 +1096,14 @@ export const NewSaleModal = () => {
 
                 {/* Line 2: TP Jamah (Total TP Amount) */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "12.5px", fontWeight: "700", color: "var(--accent-green)" }}>
+                  <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--accent-green)" }}>
                     TP Jamah = (Total TP Meter Cuts):
                   </span>
                   <div style={{ textAlign: "right" }}>
-                    <span style={{ fontSize: "14px", fontWeight: "800", color: "var(--accent-green)" }}>
+                    <span style={{ fontSize: "13.5px", fontWeight: "800", color: "var(--accent-green)" }}>
                       PKR {totalTpAmount.toLocaleString()}
                     </span>
-                    <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "6px" }}>
+                    <span style={{ fontSize: "10.5px", color: "var(--text-muted)", marginLeft: "6px" }}>
                       ({totalTpMeters}m cut)
                     </span>
                   </div>
@@ -953,18 +1115,18 @@ export const NewSaleModal = () => {
                   justifyContent: "space-between", 
                   alignItems: "center",
                   background: "var(--bg-subtle)",
-                  padding: "6px 10px",
-                  borderRadius: "6px"
+                  padding: "5px 8px",
+                  borderRadius: "5px"
                 }}>
                   <div>
-                    <span style={{ fontSize: "13px", fontWeight: "800", color: "var(--text-main)" }}>
+                    <span style={{ fontSize: "12.5px", fontWeight: "800", color: "var(--text-main)" }}>
                       {orderMode === "sale" ? "Today Total Amount (Aaj Ka Bill):" : "Return Total Credit:"}
                     </span>
-                    <div style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
+                    <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>
                       Suits (PKR {totalSuitAmount.toLocaleString()}) + TP (PKR {totalTpAmount.toLocaleString()})
                     </div>
                   </div>
-                  <span style={{ fontSize: "16px", fontWeight: "800", color: "var(--text-main)" }}>
+                  <span style={{ fontSize: "15px", fontWeight: "800", color: "var(--text-main)" }}>
                     PKR {todayTotalAmount.toLocaleString()}
                   </span>
                 </div>
@@ -972,12 +1134,12 @@ export const NewSaleModal = () => {
                 {/* Line 4: Pervs Amount (Previous Khata Balance) */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
-                    <span style={{ fontSize: "12.5px", fontWeight: "600", color: "var(--text-muted)" }}>
+                    <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted)" }}>
                       Pervs Amount (Previous Balance / Pichla Baqaya):
                     </span>
                   </div>
                   <span style={{ 
-                    fontSize: "13.5px", 
+                    fontSize: "13px", 
                     fontWeight: "800", 
                     color: previousBalance > 0 ? "var(--accent-amber)" : previousBalance < 0 ? "var(--accent-green)" : "var(--text-muted)" 
                   }}>
@@ -995,18 +1157,18 @@ export const NewSaleModal = () => {
                   justifyContent: "space-between", 
                   alignItems: "baseline", 
                   borderTop: "2px dashed var(--primary-border)", 
-                  paddingTop: "8px",
+                  paddingTop: "6px",
                   marginTop: "2px"
                 }}>
                   <div>
-                    <span style={{ fontSize: "14px", fontWeight: "800", color: "var(--primary)" }}>
+                    <span style={{ fontSize: "13.5px", fontWeight: "800", color: "var(--primary)" }}>
                       Total sum (Kul Rakam):
                     </span>
-                    <div style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
+                    <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>
                       {orderMode === "sale" ? "Today's Bill + Previous Amount" : "Previous Amount - Return Credit"}
                     </div>
                   </div>
-                  <span style={{ fontSize: "20px", fontWeight: "900", color: "var(--primary)" }}>
+                  <span style={{ fontSize: "18px", fontWeight: "900", color: "var(--primary)" }}>
                     PKR {totalSum.toLocaleString()}
                   </span>
                 </div>
@@ -1016,42 +1178,42 @@ export const NewSaleModal = () => {
                     {/* Cash Received / Amount Paid Input */}
                     <div style={{ 
                       borderTop: "1px solid var(--border-light)", 
-                      paddingTop: "8px", 
+                      paddingTop: "6px", 
                       marginTop: "2px" 
                     }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "4px" }}>
-                        <label className="form-label" style={{ marginBottom: 0, fontSize: "11.5px", fontWeight: "700" }}>
+                        <label className="form-label" style={{ marginBottom: 0, fontSize: "11px", fontWeight: "700" }}>
                           Amount Received Today / Paid (PKR)
                         </label>
                         <div style={{ display: "flex", gap: "4px" }}>
                           <button
                             type="button"
                             style={{
-                              fontSize: "10px", padding: "2px 6px", borderRadius: "4px",
+                              fontSize: "9.5px", padding: "1px 5px", borderRadius: "3px",
                               border: "1px solid var(--accent-green-border)", background: "var(--accent-green-light)",
                               color: "var(--accent-green)", fontWeight: "600", cursor: "pointer"
                             }}
                             onClick={() => setAmountPaid(String(todayTotalAmount))}
                           >
-                            Bill Cash (PKR {todayTotalAmount.toLocaleString()})
+                            Bill Cash
                           </button>
                           {previousBalance > 0 && (
                             <button
                               type="button"
                               style={{
-                                fontSize: "10px", padding: "2px 6px", borderRadius: "4px",
+                                fontSize: "9.5px", padding: "1px 5px", borderRadius: "3px",
                                 border: "1px solid var(--primary-border)", background: "var(--primary-light)",
                                 color: "var(--primary)", fontWeight: "600", cursor: "pointer"
                               }}
                               onClick={() => setAmountPaid(String(Math.max(0, totalSum)))}
                             >
-                              Clear Total (PKR {totalSum.toLocaleString()})
+                              Clear Total
                             </button>
                           )}
                           <button
                             type="button"
                             style={{
-                              fontSize: "10px", padding: "2px 6px", borderRadius: "4px",
+                              fontSize: "9.5px", padding: "1px 5px", borderRadius: "3px",
                               border: "1px solid var(--accent-amber-border)", background: "var(--accent-amber-light)",
                               color: "var(--accent-amber)", fontWeight: "600", cursor: "pointer"
                             }}
@@ -1069,26 +1231,26 @@ export const NewSaleModal = () => {
                         placeholder={`e.g. ${todayTotalAmount}`}
                         value={amountPaid}
                         onChange={(e) => setAmountPaid(e.target.value)}
-                        style={{ fontWeight: "800", color: "var(--accent-green)", fontSize: "14px", height: "32px" }}
+                        style={{ fontWeight: "800", color: "var(--accent-green)", fontSize: "13.5px", height: "30px" }}
                       />
                     </div>
 
                     {/* Net Remaining Khata Status */}
                     <div style={{ 
                       display: "flex", justifyContent: "space-between", alignItems: "center",
-                      padding: "6px 10px", 
+                      padding: "5px 8px", 
                       background: netRemainingBalance > 0 ? "var(--accent-amber-light)" : "var(--accent-green-light)",
                       border: `1px solid ${netRemainingBalance > 0 ? "var(--accent-amber-border)" : "var(--accent-green-border)"}`,
-                      borderRadius: "6px"
+                      borderRadius: "5px"
                     }}>
-                      <span style={{ fontSize: "12px", fontWeight: "700", color: netRemainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
+                      <span style={{ fontSize: "11.5px", fontWeight: "700", color: netRemainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
                         {netRemainingBalance > 0 
                           ? "Net Khata Due (Aapne Dene Hain):" 
                           : netRemainingBalance < 0 
                             ? "Advance Credit (Humne Dene Hain):" 
                             : "Khata Status:"}
                       </span>
-                      <span style={{ fontSize: "14.5px", fontWeight: "800", color: netRemainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
+                      <span style={{ fontSize: "14px", fontWeight: "800", color: netRemainingBalance > 0 ? "var(--accent-amber)" : "var(--accent-green)" }}>
                         {netRemainingBalance > 0 
                           ? `PKR ${netRemainingBalance.toLocaleString()}` 
                           : netRemainingBalance < 0 
@@ -1108,14 +1270,14 @@ export const NewSaleModal = () => {
                   placeholder="Optional delivery notes / cargo receipt # (e.g. Counter delivery, Bilal Cargo, etc.)..."
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  style={{ fontSize: "12px", padding: "6px 10px" }}
+                  style={{ fontSize: "11.5px", padding: "5px 8px" }}
                 />
               </div>
 
             </div>
 
             {/* Sticky Footer Action Bar */}
-            <div className="modal-footer" style={{ padding: "10px 18px" }}>
+            <div className="modal-footer" style={{ padding: "8px 16px" }}>
               <button type="button" className="btn-secondary" onClick={handleClose}>
                 Cancel
               </button>
@@ -1123,8 +1285,8 @@ export const NewSaleModal = () => {
               <button 
                 type="submit" 
                 className={orderMode === "sale" ? "btn-primary" : "btn-warning"} 
-                disabled={!hasAtLeastOneItem || (orderMode === "sale" && !allStockValid)}
-                style={{ minWidth: "250px", justifyContent: "center", fontSize: "13px" }}
+                disabled={!hasAtLeastOneItem}
+                style={{ minWidth: "250px", justifyContent: "center", fontSize: "12.5px" }}
               >
                 {orderMode === "sale" 
                   ? `Confirm Sale (${totalSuitQty} Suits + ${totalTpMeters}m TP • PKR ${todayTotalAmount.toLocaleString()})`
