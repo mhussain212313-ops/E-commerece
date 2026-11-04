@@ -111,6 +111,40 @@ export const FABRIC_CATEGORIES = [
   }
 ];
 
+// Standard 3-line wholesale groupings (Light Boski, Dark Boski, Washing Wear)
+export const FABRIC_GROUPS = [
+  {
+    id: "light-boski",
+    title: "Light Boski",
+    theme: "Light",
+    tpAbbr: "TPL",
+    ratePerMeter: 400,
+    suitPrice: 1600, // 4 * 400
+    categoryIds: ["cat-2", "cat-1"], // Cream, Off-White
+    colorsText: "Cream & Off-White"
+  },
+  {
+    id: "dark-boski",
+    title: "Dark Boski",
+    theme: "Dark",
+    tpAbbr: "TPD",
+    ratePerMeter: 450,
+    suitPrice: 1800, // 4 * 450
+    categoryIds: ["cat-3", "cat-4"], // Jet Black, Navy Blue
+    colorsText: "Black & Navy Blue"
+  },
+  {
+    id: "washing-wear",
+    title: "Washing Wear",
+    theme: "Wash",
+    tpAbbr: "TPW",
+    ratePerMeter: 425,
+    suitPrice: 1700, // 4 * 425
+    categoryIds: ["cat-5"], // Washing Wear
+    colorsText: "Washing Wear"
+  }
+];
+
 export const INITIAL_CLIENTS = [
   {
     id: "client-1",
